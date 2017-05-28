@@ -3,84 +3,26 @@ package main
 import (
     "io/ioutil"
     "net/http"
-    "crypto/tls"
     "database/sql"
     _ "github.com/lib/pq"
     "regexp"
-    "time"
     "log"
-    "encoding/json"
 )
 
 var (
     db  *sql.DB
 )
 
-type Profile struct {
-    FirstName   string
-    LastName    string
-    Email       string
-    DOB         time.Time
-    Bio         string
+var validPath = regexp.MustCompile("^/(profile|post|comment|react|search|authenticate|feed)/([a-zA-Z0-9/]*)$")
+/*
+func createAccount(email string, dob time.Time) error {
+    return db.Query("INSERT INTO account (email, dob) VALUES ($1, $2);", email, dob)
 }
 
-type Post struct {
-    Error       string
-    AuthorUrl   string
-    Location    string
-    Timestamp   time.Time
-    Content     []byte
+func authenticationHandler(w http.ResponseWriter, r *http.Request) {
+    
 }
-
-var validPath = regexp.MustCompile("^/(home|profile|data)/([a-zA-Z0-9]+)$")
-
-func loadProfile(url string) (*Profile, error) {
-    var (
-        firstname   string
-        lastname    string
-        email       string
-        dob         time.Time
-        bio         string
-    )
-
-    err := db.QueryRow("SELECT firstname, lastname, email, dob, bio FROM profile WHERE url = $1", url).Scan(&firstname, &lastname, &email, &dob, &bio)
-    if err != nil {
-        return nil, err
-    }
-
-    return &Profile {FirstName: firstname,
-                    LastName: lastname,
-                    Email: email,
-                    DOB: dob,
-                    Bio: bio}, nil
-}
-
-func profileHandler(w http.ResponseWriter, r *http.Request, url string) {
-    log.Println("Profile " + url + " requested.");
-
-    addHeaders(w, r)
-
-    p, err := loadProfile(url)
-
-    if err != nil {
-        if err != sql.ErrNoRows {
-            http.Error(w, err.Error(), http.StatusInternalServerError)
-            log.Println(err)
-            return
-        } else {
-            p = &Profile {FirstName: "User does not exist.", LastName: "", Email: "", DOB: time.Time{}, Bio: ""}
-        }
-    }
-
-    err = json.NewEncoder(w).Encode(p)
-
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusInternalServerError)
-    }
-
-    log.Println("Profile " + url + " encoded.")
-}
-
+*/
 func makeHandler(fn func (http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
     return func(w http.ResponseWriter, r *http.Request) {
         m := validPath.FindStringSubmatch(r.URL.Path)
@@ -89,7 +31,14 @@ func makeHandler(fn func (http.ResponseWriter, *http.Request, string)) http.Hand
             log.Println(r.URL.Path + " not found.")
             return
         }
-        fn(w, r, m[2])
+
+        path := ""
+
+        if len(m) > 2 {
+            path = m[2]
+        }
+
+        fn(w, r, path)
     }
 }
 
@@ -100,6 +49,26 @@ func addHeaders(w http.ResponseWriter, r *http.Request) {
         w.Header().Set("Access-Control-Allow-Headers",
             "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
     }
+}
+
+func checkAuthorisation(w http.ResponseWriter, r *http.Request) bool {
+    email, password, ok := r.BasicAuth()
+
+    if !ok {
+        w.Header().Set("Authorization", "Basic realm=loggedin")
+        w.WriteHeader(401)
+        log.Println("Authorisation requested")
+        return false
+    }
+
+    err := authenticate(email, password)
+
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusForbidden)
+        return false
+    }
+
+    return true
 }
 
 func main() {
@@ -120,24 +89,28 @@ func main() {
 
     // TLS
     cPath := "/etc/letsencrypt/live/netwrk.website/"
-    cer, err := tls.LoadX509KeyPair(cPath + "fullchain.pem", cPath + "privkey.pem")
+//    cer, err := tls.LoadX509KeyPair(cPath + "fullchain.pem", cPath + "privkey.pem")
 
-    if err != nil {
-        log.Fatal(err)
-    }
+//    if err != nil {
+//        log.Fatal(err)
+//    }
 
-    config := &tls.Config{Certificates: []tls.Certificate{cer}}
-    ln, err := tls.Listen("tcp", ":8080", config)
+//    config := &tls.Config{Certificates: []tls.Certificate{cer}}
+//    ln, err := tls.Listen("tcp", ":8000", config)
 
-    if err != nil {
-        log.Fatal(err)
-    }
+//    if err != nil {
+//        log.Fatal(err)
+//    }
 
-    defer ln.Close()
+//    defer ln.Close()
 
-    //r.HandleFunc("/home/", makeHandler(homeHandler))
-    http.HandleFunc("/profile/", makeHandler(profileHandler))//.Methods("GET")
-    //r.HandleFunc("/data/", makeHandler(dataHandler))
+    http.HandleFunc("/profile/", makeHandler(profileHandler))
+    http.HandleFunc("/post/", makeHandler(postHandler))
+    http.HandleFunc("/comment/", makeHandler(commentHandler))
+    http.HandleFunc("/react/", makeHandler(reactionHandler))
+    http.HandleFunc("/search/", makeHandler(searchHandler))
+    http.HandleFunc("/authenticate/", makeHandler(authenticationHandler))
+    http.HandleFunc("/feed/", makeHandler(feedHandler))
 
     log.Println("Listening on port 8000...")
     log.Fatal(http.ListenAndServeTLS(":8000", cPath + "fullchain.pem", cPath + "privkey.pem", nil))
