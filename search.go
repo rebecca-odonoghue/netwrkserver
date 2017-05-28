@@ -3,9 +3,11 @@ package main
 import(
     "net/http"
     "database/sql"
+    "bytes"
     _ "github.com/lib/pq"
     "encoding/json"
     "log"
+    "strings"
 )
 
 const NumLiveResults int = 5
@@ -22,8 +24,6 @@ type Result struct {
     firstname   string
     lastname    string
 }
-
-//var validSearch = regexp.MustCompile("^([submit/]?)([a-zA-Z0-9]+)$")
 
 func searchHandler(w http.ResponseWriter, r *http.Request, query string) {
 
@@ -61,7 +61,6 @@ func searchHandler(w http.ResponseWriter, r *http.Request, query string) {
             return
         }
 
-        addHeaders(w, r)
         err = json.NewEncoder(w).Encode(results)
 
         if err != nil {
@@ -71,21 +70,99 @@ func searchHandler(w http.ResponseWriter, r *http.Request, query string) {
     }
 }
 
-func search(s Search, searchString string) ([]Result, error) {
+func recentSearchHandler(w http.ResponseWriter, r *http.Request, query string) {
+
+    if query != "" {
+        http.NotFound(w, r)
+        return
+    }
+
+    if r.Body == nil {
+        http.Error(w, "Request body missing", http.StatusBadRequest)
+        return
+    }
+
+    var email string
+    err := json.NewDecoder(r.Body).Decode(&email)
+
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+
     var results []Result
+    results, err = getAllRecent(email)
+
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    err = json.NewEncoder(w).Encode(results)
+
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+    }
+}
+
+func saveSearchHandler(w http.ResponseWriter, r *http.Request, query string) {
+
+    if query == "" {
+        http.NotFound(w, r)
+        return
+    }
+
+    if r.Body == nil {
+        http.Error(w, "Request body missing", http.StatusBadRequest)
+        return
+    }
+
+    var email string
+    err := json.NewDecoder(r.Body).Decode(&email)
+
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+
+    err = submitSearch(email, query)
+
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    w.WriteHeader(http.StatusOK)
+}
+
+func search(s Search, searchString string) ([]Result, error) {
 
     if searchString == "" {
         return getAllRecent(s.userEmail)
     }
 
-    var numResults int
+    var (
+        results []Result
+        numResults int
+        exp bytes.Buffer
+        sep = ""
+    )
+
     if s.live {
         numResults = NumLiveResults
     } else {
         numResults = NumResults
     }
 
-    r, err := searchRecent(s.userEmail, searchString, numResults)
+    exp.WriteString("%(")
+    for _, word := range strings.Split(searchString, "+") {
+        exp.WriteString(sep)
+        exp.WriteString(word)
+        sep = "|"
+    }
+    exp.WriteString(")%")
+
+    r, err := searchRecent(s.userEmail, exp.String(), numResults)
 
     if err != nil {
         return nil, err
@@ -96,7 +173,7 @@ func search(s Search, searchString string) ([]Result, error) {
     }
 
     if len(r) < numResults {
-        r, err = searchFriends(s.userEmail, searchString, numResults - len(r))
+        r, err = searchFriends(s.userEmail, exp.String(), numResults - len(r))
 
         if (err != nil) {
             return nil, err
@@ -104,7 +181,7 @@ func search(s Search, searchString string) ([]Result, error) {
     }
 
     if len(r) < numResults {
-        r, err = searchAll(s.userEmail, searchString, numResults - len(r))
+        r, err = searchAll(s.userEmail, exp.String(), numResults - len(r))
 
         if err != nil {
             return nil, err
@@ -144,17 +221,21 @@ func getAllRecent(userEmail string) ([]Result, error) {
     return results, nil
 }
 
-func searchRecent(userEmail string, searchString string, numResults int) ([]Result, error) {
+func searchRecent(userEmail string, searchExp string, numResults int) ([]Result, error) {
+
 
     query := `SELECT profile.url, profile.firstname, profile.lastname
-        FROM profile, search
-        WHERE search.acctEmail = $1 
-        AND profile.url = search.resultUrl
-        AND (profile.firstname LIKE $2 OR profile.lastname LIKE $2)
-        ORDER BY search.timestamp DESC
-        FETCH FIRST $3 ROWS ONLY;`
+            FROM profile, search
+            WHERE search.acctEmail = $1 
+            AND profile.url = search.resultUrl
+            AND (profile.firstname SIMILAR TO $2 
+                OR profile.lastname SIMILAR TO $2
+                OR profile.email SIMILAR TO $2
+                OR profile.url SIMILAR TO $2)
+            ORDER BY search.timestamp DESC
+            FETCH FIRST $3 ROWS ONLY;`
 
-    rows, err := db.Query(query, userEmail, searchString, numResults)
+    rows, err := db.Query(query, userEmail, searchExp, numResults)
 
     if err != nil {
         return nil, err
@@ -175,19 +256,22 @@ func searchRecent(userEmail string, searchString string, numResults int) ([]Resu
     return results, nil
 }
 
-func searchFriends(userEmail string, searchString string, numResults int) ([]Result, error) {
+func searchFriends(userEmail string, searchExp string, numResults int) ([]Result, error) {
 
     query := `SELECT DISTINCT res.url, res.firstname, res.lastname
-        FROM profile res, profile usr, connection
-        WHERE usr.email = $1
-        AND (res.firstname LIKE $2 OR res.lastname LIKE $2)
-        AND (res.url IN(connection.fromurl, connection.tourl) 
-        AND usr.url IN(connection.fromurl, connection.tourl))
-        AND NOT usr.url = res.url
-        ORDER BY search.timestamp DESC
-        FETCH FIRST $3 ROWS ONLY;`
+            FROM profile res, profile usr, connection
+            WHERE usr.email = $1
+            AND (res.firstname SIMILAR TO $2 
+                OR res.lastname SIMILAR TO $2
+                OR res.email SIMILAR TO $2
+                OR res.url SIMILAR TO $2)
+            AND (res.url IN(connection.fromurl, connection.tourl) 
+            AND usr.url IN(connection.fromurl, connection.tourl))
+            AND NOT usr.url = res.url
+            ORDER BY search.timestamp DESC
+            FETCH FIRST $3 ROWS ONLY;`
 
-    rows, err := db.Query(query, userEmail, searchString, numResults)
+    rows, err := db.Query(query, userEmail, searchExp, numResults)
 
     if err != nil {
         return nil, err
@@ -200,7 +284,7 @@ func searchFriends(userEmail string, searchString string, numResults int) ([]Res
         err = rows.Scan(&(res.url), &(res.firstname), &(res.lastname))
         results = append(results, res)
     }
-    // IF LESS THAN 5 ROWS, CHECK FRIENDS, THEN EVERYONE!
+
     if err != nil {
         return nil, err
     }
@@ -208,15 +292,18 @@ func searchFriends(userEmail string, searchString string, numResults int) ([]Res
     return results, nil
 }
 
-func searchAll(userEmail string, searchString string, numResults int) ([]Result, error) {
+func searchAll(userEmail string, searchExp string, numResults int) ([]Result, error) {
 
     query := `SELECT profile.url, profile.firstname, profile.lastname
-        FROM profile
-        WHERE (profile.firstname LIKE $1 OR profile.lastname LIKE $1)
-        ORDER BY search.timestamp DESC
-        FETCH FIRST $2 ROWS ONLY;`
+            FROM profile
+            WHERE (profile.firstname SIMILAR TO $1 
+                OR profile.lastname SIMILAR TO $1
+                OR profile.email SIMILAR TO $1
+                OR profile.url SIMILAR TO $1)
+            ORDER BY search.timestamp DESC
+            FETCH FIRST $2 ROWS ONLY;`
 
-    rows, err := db.Query(query, searchString, numResults)
+    rows, err := db.Query(query, searchExp, numResults)
 
     if err != nil {
         return nil, err

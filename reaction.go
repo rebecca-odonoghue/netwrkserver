@@ -5,7 +5,6 @@ import(
     _ "github.com/lib/pq"
     "encoding/json"
     "log"
-    "regexp"
 )
 
 type Reaction struct {
@@ -15,11 +14,9 @@ type Reaction struct {
     isLike      bool
 }
 
-var reactPath = regexp.MustCompile("^(new|delete|modify)$")
-
 func reactionHandler(w http.ResponseWriter, r *http.Request, url string) {
-    
-    path := validPath.FindStringSubmatch(url)
+
+    path := editablePath.FindStringSubmatch(url)
 
     if  path == nil {
         http.NotFound(w, r)
@@ -30,6 +27,8 @@ func reactionHandler(w http.ResponseWriter, r *http.Request, url string) {
         http.Error(w, "Request body missing", http.StatusBadRequest)
         return
     }
+    
+
 
     var react Reaction
 
@@ -47,7 +46,7 @@ func reactionHandler(w http.ResponseWriter, r *http.Request, url string) {
         err = deleteReaction(react.identifier, react.authorUrl, react.toPost)
     case "modify":
         err = modifyReaction(react.identifier, react.authorUrl, react.toPost, react.isLike)
-    default: 
+    default:
         http.NotFound(w, r)
         return
     }

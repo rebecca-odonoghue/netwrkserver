@@ -13,16 +13,9 @@ var (
     db  *sql.DB
 )
 
-var validPath = regexp.MustCompile("^/(profile|post|comment|react|search|authenticate|feed)/([a-zA-Z0-9/]*)$")
-/*
-func createAccount(email string, dob time.Time) error {
-    return db.Query("INSERT INTO account (email, dob) VALUES ($1, $2);", email, dob)
-}
+var validPath = regexp.MustCompile("^/(profile|check|connect|account|register|post|comment|search|authenticate|feed)/([a-zA-Z0-9/]*)$")
+var editablePath = regexp.MustCompile("^(get|new|delete|modify)[/([a-zA-Z0-9]*)]*$")
 
-func authenticationHandler(w http.ResponseWriter, r *http.Request) {
-    
-}
-*/
 func makeHandler(fn func (http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
     return func(w http.ResponseWriter, r *http.Request) {
         m := validPath.FindStringSubmatch(r.URL.Path)
@@ -37,7 +30,8 @@ func makeHandler(fn func (http.ResponseWriter, *http.Request, string)) http.Hand
         if len(m) > 2 {
             path = m[2]
         }
-
+        
+        addHeaders(w, r)
         fn(w, r, path)
     }
 }
@@ -79,7 +73,7 @@ func main() {
         log.Fatal(err)
     }
 
-    db, err = sql.Open("postgres", "user=postgres password=" + string(pwd) + " dbname=netwrk")
+    db, err = sql.Open("postgres", "user=postgres password=" + string(pwd) + " dbname=netwrk sslmode=require")
 
     if err != nil {
         log.Fatal(err)
@@ -87,30 +81,22 @@ func main() {
 
     defer db.Close()
 
-    // TLS
+    // TLS Certificate Path
     cPath := "/etc/letsencrypt/live/netwrk.website/"
-//    cer, err := tls.LoadX509KeyPair(cPath + "fullchain.pem", cPath + "privkey.pem")
 
-//    if err != nil {
-//        log.Fatal(err)
-//    }
-
-//    config := &tls.Config{Certificates: []tls.Certificate{cer}}
-//    ln, err := tls.Listen("tcp", ":8000", config)
-
-//    if err != nil {
-//        log.Fatal(err)
-//    }
-
-//    defer ln.Close()
-
-    http.HandleFunc("/profile/", makeHandler(profileHandler))
-    http.HandleFunc("/post/", makeHandler(postHandler))
-    http.HandleFunc("/comment/", makeHandler(commentHandler))
-    http.HandleFunc("/react/", makeHandler(reactionHandler))
-    http.HandleFunc("/search/", makeHandler(searchHandler))
-    http.HandleFunc("/authenticate/", makeHandler(authenticationHandler))
-    http.HandleFunc("/feed/", makeHandler(feedHandler))
+    // Request Handler Functions
+    http.HandleFunc("/profile", makeHandler(profileHandler))
+    http.HandleFunc("/check", makeHandler(checkUrlHandler))
+    http.HandleFunc("/connect", makeHandler(connectionHandler))
+    http.HandleFunc("/post", makeHandler(postHandler))
+    http.HandleFunc("/comment", makeHandler(commentHandler))
+    http.HandleFunc("/search/recent", makeHandler(recentSearchHandler))
+    http.HandleFunc("/search/save", makeHandler(saveSearchHandler))
+    http.HandleFunc("/search", makeHandler(searchHandler))
+    http.HandleFunc("/authenticate", makeHandler(authenticationHandler))
+    http.HandleFunc("/register", makeHandler(registrationHandler))
+    http.HandleFunc("/account", makeHandler(accountHandler))
+    http.HandleFunc("/feed", makeHandler(feedHandler))
 
     log.Println("Listening on port 8000...")
     log.Fatal(http.ListenAndServeTLS(":8000", cPath + "fullchain.pem", cPath + "privkey.pem", nil))

@@ -16,61 +16,129 @@ type Post struct {
     content     string
 }
 
-func postHandler(w http.ResponseWriter, r *http.Request, id string) {
-    log.Println("Post " + id + "requested")
+func postHandler(w http.ResponseWriter, r *http.Request, url string) {
 
-    addHeaders(w, r)
+    path := editablePath.FindStringSubmatch(url)
 
-    p, err := loadPost(id)
+    if path == nil {
+        http.NotFound(w,r)
+        return
+    }
 
-    if err != nil {
-        if err != sql.ErrNoRows {
-            http.Error(w, err.Error(), http.StatusInternalServerError)
-            log.Println(err)
-            return
-        } else {
-            http.Error(w, err.Error(), http.StatusInternalServerError)
-            log.Println(err)
+    switch path[1] {
+    case "get":
+        if len(path) < 3 {
+            http.NotFound(w, r)
             return
         }
+
+        p, err := loadPost(path[2])
+
+        if err != nil {
+            if err != sql.ErrNoRows {
+                http.NotFound(w, r)
+                log.Println(err)
+                return
+            } else {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                log.Println(err)
+                return
+            }
+        }
+
+        err = json.NewEncoder(w).Encode(p)
+
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+            log.Println(err)
+        }
+    case "new":
+        if r.Body == nil {
+            http.Error(w, "Request body empty", http.StatusBadRequest)
+            return
+        }
+
+        var p Post
+        err := json.NewDecoder(r.Body).Decode(&p)
+
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusBadRequest)
+            return
+        }
+
+        err = createPost(p)
+
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+            return
+        }
+
+        w.WriteHeader(http.StatusOK)
+    case "delete":
+        if len(path) < 3 {
+            http.NotFound(w, r)
+            return
+        }
+
+        var p Post
+        err := json.NewDecoder(r.Body).Decode(&p)
+
+        err = deletePost(path[2])
+
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+            return
+        }
+
+        w.WriteHeader(http.StatusOK)
+    case "modify":
+        if r.Body == nil || len(path) < 3 {
+            http.Error(w, "Request incomplete", http.StatusBadRequest)
+            return
+        }
+
+        var p Post 
+        err := json.NewDecoder(r.Body).Decode(&p)
+
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusBadRequest)
+            return
+        }
+
+        err = editPost(path[2], p.content)
+
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+            return
+        }
+
+        w.WriteHeader(http.StatusOK)
+    default:
+        http.NotFound(w, r)
+        return
     }
-
-    err = json.NewEncoder(w).Encode(p)
-
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusInternalServerError)
-        log.Println(err)
-    }
-
 }
 
 
 func loadPost(id string) (*Post, error) {
-    var (
-        profileUrl  string
-        authorUrl   string
-        timestamp   time.Time
-        content     string
-    )
+    var post Post
 
-    query := `SELECT profile-url, author-url, timestamp, content
+    query := `SELECT profileurl, authorurl, timestamp, content
             FROM post
             WHERE id = $1;`
 
-    err := db.QueryRow(query, id).Scan(&profileUrl, &authorUrl, &timestamp, &content)
+    err := db.QueryRow(query, id).Scan(&(post.profileUrl),
+            &(post.authorUrl), &(post.timestamp), &(post.content))
 
     if err != nil {
         return nil, err
     }
 
-    return &Post {profileUrl: profileUrl,
-            authorUrl: authorUrl,
-            timestamp: timestamp,
-            content: content}, nil
+    return &post, nil
 }
 
-func createPost(id int, post *Post) error {
-    query := `INSERT INTO post (profile-url, author-url, timestamp, content)
+func createPost(post Post) error {
+    query := `INSERT INTO post (profileurl, authorurl, timestamp, content)
             VALUES ($1, $2, $3, $4);`
 
     _, err := db.Exec(query, post.profileUrl, post.authorUrl,
@@ -79,7 +147,7 @@ func createPost(id int, post *Post) error {
     return err
 }
 
-func deletePost(id int) error {
+func deletePost(id string) error {
     query := `DELETE FROM post
             WHERE id = $1;`
 
@@ -88,7 +156,7 @@ func deletePost(id int) error {
     return err
 }
 
-func editPost(id int, content string) error {
+func editPost(id string, content string) error {
     query := `UPDATE post
             SET content = $1
             WHERE id = $2;`
