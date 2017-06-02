@@ -2,6 +2,7 @@ package main
 
 import (
     "net/http"
+    "github.com/gorilla/mux"
     "database/sql"
     _ "github.com/lib/pq"
     "log"
@@ -10,29 +11,27 @@ import (
 )
 
 type Post struct {
-    profileUrl  string
-    authorUrl   string
-    timestamp   time.Time
-    content     string
+    ProfileUrl  string      `json:"profileUrl"`
+    AuthorUrl   string      `json:"authorUrl"`
+    ID          int         `json:"id"`
+    Timestamp   time.Time   `json:"timestamp"`
+    Content     string      `json:"content"`
 }
 
-func postHandler(w http.ResponseWriter, r *http.Request, url string) {
+func postHandler(w http.ResponseWriter, r *http.Request) {
+    log.Println("postHandler")
+    vars := mux.Vars(r)
+    action := vars["action"]
+    id := vars["id"]
 
-    path := editablePath.FindStringSubmatch(url)
-
-    if path == nil {
-        http.NotFound(w,r)
-        return
-    }
-
-    switch path[1] {
+    switch action {
     case "get":
-        if len(path) < 3 {
+        if id == "" {
             http.NotFound(w, r)
             return
         }
 
-        p, err := loadPost(path[2])
+        p, err := loadPost(id)
 
         if err != nil {
             if err != sql.ErrNoRows {
@@ -75,15 +74,15 @@ func postHandler(w http.ResponseWriter, r *http.Request, url string) {
 
         w.WriteHeader(http.StatusOK)
     case "delete":
-        if len(path) < 3 {
+        if id == "" {
             http.NotFound(w, r)
             return
         }
 
-        var p Post
-        err := json.NewDecoder(r.Body).Decode(&p)
+        //var p Post
+        //err := json.NewDecoder(r.Body).Decode(&p)
 
-        err = deletePost(path[2])
+        err := deletePost(id)
 
         if err != nil {
             http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -92,7 +91,7 @@ func postHandler(w http.ResponseWriter, r *http.Request, url string) {
 
         w.WriteHeader(http.StatusOK)
     case "modify":
-        if r.Body == nil || len(path) < 3 {
+        if r.Body == nil || id == "" {
             http.Error(w, "Request incomplete", http.StatusBadRequest)
             return
         }
@@ -105,7 +104,7 @@ func postHandler(w http.ResponseWriter, r *http.Request, url string) {
             return
         }
 
-        err = editPost(path[2], p.content)
+        err = editPost(id, p.Content)
 
         if err != nil {
             http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -127,8 +126,8 @@ func loadPost(id string) (*Post, error) {
             FROM post
             WHERE id = $1;`
 
-    err := db.QueryRow(query, id).Scan(&(post.profileUrl),
-            &(post.authorUrl), &(post.timestamp), &(post.content))
+    err := db.QueryRow(query, id).Scan(&(post.ProfileUrl),
+            &(post.AuthorUrl), &(post.Timestamp), &(post.Content))
 
     if err != nil {
         return nil, err
@@ -138,16 +137,16 @@ func loadPost(id string) (*Post, error) {
 }
 
 func createPost(post Post) error {
-    query := `INSERT INTO post (profileurl, authorurl, timestamp, content)
-            VALUES ($1, $2, $3, $4);`
+    query := `INSERT INTO post (profileurl, authorurl, content)
+            VALUES ($1, $2, $3);`
 
-    _, err := db.Exec(query, post.profileUrl, post.authorUrl,
-            post.timestamp, post.content)
+    _, err := db.Exec(query, post.ProfileUrl, post.AuthorUrl, post.Content)
 
     return err
 }
 
 func deletePost(id string) error {
+    log.Println("delete: "+id)
     query := `DELETE FROM post
             WHERE id = $1;`
 

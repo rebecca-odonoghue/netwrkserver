@@ -2,6 +2,7 @@ package main
 
 import (
     "net/http"
+    "github.com/gorilla/mux"
     "database/sql"
     _ "github.com/lib/pq"
     "log"
@@ -13,35 +14,31 @@ import (
 var connectPath = regexp.MustCompile("^(request|accept|delete|modify)/?$")
 
 type Profile struct {
-    firstname   string
-    lastname    string
-    email       string
-    dob         time.Time
-    bio         string
+    FirstName   string      `json:"firstname"`
+    LastName    string      `json:"lastname"`
+    Email       string      `json:"email"`
+    DOB         time.Time   `json:"dob"`
+    Bio         string      `json:"bio"`
 }
 
 type Connection struct {
-    fromUrl     string
-    toUrl       string
-    fromDesc    string
-    toDesc      string
+    FromUrl     string      `json:"fromUrl"`
+    ToUrl       string      `json:"toUrl"`
+    FromDesc    string      `json:"fromDesc"`
+    ToDesc      string      `json:"toDesc"`
 }
 
-func profileHandler(w http.ResponseWriter, r *http.Request, url string) {
+func profileHandler(w http.ResponseWriter, r *http.Request) {
+    vars := mux.Vars(r)
+    action := vars["action"]
+    url := vars["url"]
 
-    path := editablePath.FindStringSubmatch(url)
-
-    if path == nil {
-        http.NotFound(w, r)
-        return
-    }
-
-    switch path[1] {
+    switch action {
     case "get":
         p, err := loadProfile(url)
 
         if err != nil {
-            if err != sql.ErrNoRows {
+            if err == sql.ErrNoRows {
                 http.NotFound(w, r)
             } else {
                 http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -50,7 +47,7 @@ func profileHandler(w http.ResponseWriter, r *http.Request, url string) {
             return
         }
 
-        err = json.NewEncoder(w).Encode(p)
+        err = json.NewEncoder(w).Encode(&p)
 
         if err != nil {
             http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -59,7 +56,7 @@ func profileHandler(w http.ResponseWriter, r *http.Request, url string) {
 
         log.Println("Profile " + url + " encoded.")
     case "new":
-        if r.Body == nil || len(path) < 3 {
+        if r.Body == nil || url == "" {
             http.Error(w, "Request incomplete", http.StatusBadRequest)
             return
         }
@@ -72,7 +69,7 @@ func profileHandler(w http.ResponseWriter, r *http.Request, url string) {
             return
         }
 
-        err = createProfile(path[2], p)
+        err = createProfile(url, p)
 
         if err != nil {
             http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -81,7 +78,7 @@ func profileHandler(w http.ResponseWriter, r *http.Request, url string) {
 
         w.WriteHeader(http.StatusOK)
     case "delete":
-        if len(path) < 3 {
+        if url == "" {
             http.NotFound(w, r)
             return
         }
@@ -89,7 +86,7 @@ func profileHandler(w http.ResponseWriter, r *http.Request, url string) {
         var p Profile
         err := json.NewDecoder(r.Body).Decode(&p)
 
-        err = deleteProfile(path[2])
+        err = deleteProfile(url)
 
         if err != nil {
             http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -98,7 +95,7 @@ func profileHandler(w http.ResponseWriter, r *http.Request, url string) {
 
         w.WriteHeader(http.StatusOK)
     case "modify":
-        if r.Body == nil || len(path) < 3 {
+        if r.Body == nil || url == "" {
             http.Error(w, "Request incomplete", http.StatusBadRequest)
             return
         }
@@ -111,7 +108,7 @@ func profileHandler(w http.ResponseWriter, r *http.Request, url string) {
             return
         }
 
-        err = modifyProfile(path[2], p)
+        err = modifyProfile(url, p)
 
         if err != nil {
             http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -126,62 +123,101 @@ func profileHandler(w http.ResponseWriter, r *http.Request, url string) {
 
 }
 
-func connectionHandler(w http.ResponseWriter, r *http.Request, url string) {
+func connectionHandler(w http.ResponseWriter, r *http.Request) {
+    vars := mux.Vars(r)
+    action := vars["action"]
+    p1 := vars["p1"]
+    p2 := vars["p2"]
 
-    path := connectPath.FindStringSubmatch(url)
+    //var c Connection
+    //err := json.NewDecoder(r.Body).Decode(&c)
 
-    if path == nil {
-        http.NotFound(w, r)
-        return
-    }
+    //if err != nil {
+      //  http.Error(w, err.Error(), http.StatusBadRequest)
+       // return
+   // }
+    var err error
+    switch action {
+    case "get":
+        log.Println("connection check!")
+        exists, accepted, requestedBy := connectionExists(p1,p2)
+        
+        if exists {
+            log.Println("exists")
+            log.Println("requestedBy: " + requestedBy);
+        }
+        if accepted {
+            log.Println("accepted")
+        }
+        err = json.NewEncoder(w).Encode(struct {
+            Exists bool `json:"exists"`
+            Accepted bool `json:"accepted"`
+            RequestedBy string `json:"requestedBy"`
+        }{
+            Exists: exists,
+            Accepted: accepted,
+            RequestedBy: requestedBy,
+        })
 
-    var c Connection
-    err := json.NewDecoder(r.Body).Decode(&c)
-
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
-        return
-    }
-
-    switch path[1] {
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+            return
+        }
     case "request":
-        err = requestConnection(c)
+        err = requestConnection(p1, p2)
     case "accept":
-        err = acceptConnection(c.fromUrl, c.toUrl)
+        err = acceptConnection(p1, p2)
     case "delete":
-        err = deleteConnection(c.fromUrl, c.toUrl)
+        err = deleteConnection(p1, p2)
     case "modify":
-        err = modifyConnection(c)
+        err = modifyConnection(p1, p2)
     default:
         http.NotFound(w, r)
+        return
     }
+
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+    }
+
+}
+
+func checkUrlHandler(w http.ResponseWriter, r *http.Request) {
+    vars := mux.Vars(r)
+    url := vars["url"]
+
+    query := `SELECT url 
+              FROM profile
+              WHERE url = $1;`
+
+    err := db.QueryRow(query, url).Scan(&url)
+    var available = false
+
+    if err != nil {
+        if err == sql.ErrNoRows {
+            available = true
+        } else {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+            return
+        }
+    }
+
+    err = json.NewEncoder(w).Encode(
+        struct {
+            Available bool `json:"available"`
+        }{
+            Available: available,
+        })
 
     if err != nil {
         http.Error(w, err.Error(), http.StatusInternalServerError)
     }
 }
 
-func checkUrlHandler(w http.ResponseWriter, r *http.Request, url string) {
+func friendListHandler(w http.ResponseWriter, r *http.Request) {
+    vars := mux.Vars(r)
+    url := vars["url"]
 
-    query := `SELECT *
-              FROM profile
-              WHERE url = $1;`
-    
-    err := db.QueryRow(query, url).Scan()
-
-    if err != nil {
-        if err == sql.ErrNoRows {
-            http.NotFound(w, r)
-        } else {
-            http.Error(w, err.Error(), http.StatusInternalServerError)
-        }
-        return
-    }
-
-    w.WriteHeader(http.StatusOK)
-}
-
-func friendListHandler(w http.ResponseWriter, r *http.Request, url string) {
     friends, err := loadFriends(url)
 
     if err != nil {
@@ -205,7 +241,7 @@ func loadProfile(url string) (*Profile, error) {
 
     var p Profile
     row := db.QueryRow(query, url)
-    err := row.Scan(&(p.firstname), &(p.lastname), &(p.email), &(p.dob), &(p.bio))
+    err := row.Scan(&(p.FirstName), &(p.LastName), &(p.Email), &(p.DOB), &(p.Bio))
 
     if err != nil {
         return nil, err
@@ -214,15 +250,22 @@ func loadProfile(url string) (*Profile, error) {
     return &p, nil
 }
 
-func loadFriends(userUrl string) (map[string]Profile, error) {
-    var friends map[string]Profile
+func loadFriends(userUrl string) ([]struct{
+        URL string  `json:"url"`
+        P Profile `json:"profile"`
+    }, error) {
 
-    query := `SELECT friend.firstname, friend.lastname, friend.email, friend.dob, friend.bio
-            FROM profile user, profile friend, connection
+    var friends []struct{
+        URL string  `json:"url"`
+        P Profile `json:"profile"`
+    }
+
+    query := `SELECT friend.url, friend.firstname, friend.lastname, friend.email, friend.dob, friend.bio
+            FROM profile user, profile friend, connection c
             WHERE user.url = $1
-            AND user.url IN(connection.fromurl, connection.tourl)
-            AND friend.url IN(connection.fromurl, connetion.tourl)
-            AND user.url != friend.url;`
+            AND user.url IN(c.fromurl, c.tourl)
+            AND friend.url IN(c.fromurl, c.tourl)
+            AND user.url <> friend.url;`
 
     rows, err := db.Query(query, userUrl)
 
@@ -230,12 +273,19 @@ func loadFriends(userUrl string) (map[string]Profile, error) {
         return nil, err
     }
 
-    friends = make(map[string]Profile)
-
     for rows.Next() {
-        var p Profile
-        err = rows.Scan(&(p.firstname), &(p.lastname), &(p.email), &(p.dob), &(p.bio))
-        friends[userUrl] = p
+        var friend struct{
+            URL string  `json:"url"`
+            P Profile `json:"profile"`
+        }
+
+        err = rows.Scan(&friend.URL,
+                &friend.P.FirstName,
+                &friend.P.LastName,
+                &friend.P.Email,
+                &friend.P.DOB,
+                &friend.P.Bio)
+        friends = append(friends, friend)
     }
 
     if err != nil {
@@ -249,8 +299,8 @@ func createProfile(url string, profile Profile) error {
     query := `INSERT INTO profile (url, firstname, lastname, email, dob, bio)
             VALUES ($1,$2, $3, $4, $5, $6);`
 
-    _, err := db.Exec(query, url, profile.firstname, profile.lastname,
-            profile.email, profile.dob, profile.bio)
+    _, err := db.Exec(query, url, profile.FirstName, profile.LastName,
+            profile.Email, profile.DOB, profile.Bio)
 
     return err
 }
@@ -270,47 +320,69 @@ func modifyProfile(url string, profile Profile) error {
             SET firstname = $1, lastname = $2, dob = $3, bio = $4
             WHERE url = $5;`
 
-    _, err := db.Exec(query, profile.firstname, profile.lastname,
-            profile.dob, profile.bio, url)
+    _, err := db.Exec(query, profile.FirstName, profile.LastName,
+            profile.DOB, profile.Bio, url)
 
     return err
 }
 
-func requestConnection(con Connection) error {
+func connectionExists(p1 string, p2 string) (bool, bool, string) {
+
+    query := `SELECT c.accepted, c.fromurl
+            FROM connection c
+            WHERE $1 IN(c.fromurl, c.tourl)
+            AND $2 IN(c.fromurl, c.tourl);`
+
+    var accepted bool
+    var requestedBy string
+
+    err := db.QueryRow(query, p1, p2).Scan(&accepted, &requestedBy)
+
+    if err != nil {
+        log.Println(err.Error());
+        return false, false, ""
+    }
+
+    return true, accepted, requestedBy
+}
+
+func requestConnection(p1 string, p2 string) error {
     query := `INSERT INTO connection (fromurl, tourl, fromdescriptor, todescriptor)
             VALUES ($1, $2, $3, $4);`
 
-    _, err := db.Exec(query, con.fromUrl, con.toUrl, con.fromDesc, con.toDesc)
+    _, err := db.Exec(query, p1, p2, "friend", "friend")
 
     return err
 }
 
-func acceptConnection(senderUrl string, recipientUrl string) error {
-    query := `UPDATE connection
+func acceptConnection(p1 string, p2 string) error {
+    query := `UPDATE connection 
             SET accepted = true
-            WHERE fromurl = $1 AND tourl = $2;`
+            WHERE fromurl IN($1, $2)
+            AND tourl IN($1, $2);`
 
-    _, err := db.Exec(query, senderUrl, recipientUrl);
+    _, err := db.Exec(query, p1, p2);
 
     return err
 }
 
-func deleteConnection(senderUrl string, recipientUrl string) error {
+func deleteConnection(p1 string, p2 string) error {
     query := `DELETE FROM connection
-            WHERE fromurl = $1 AND tourl = $2;`
+            WHERE fromurl IN($1, $2)
+            AND tourl IN($1, $2);`
 
-    _, err := db.Exec(query, senderUrl, recipientUrl);
+    _, err := db.Exec(query, p1, p2);
 
     return err
 }
 
-func modifyConnection(con Connection) error {
+func modifyConnection(p1 string, p2 string) error {
     query := `UPDATE connection
             SET fromdescriptor = $1, todescriptor = $2
             WHERE fromurl = $3 
             AND tourl = $4;`
 
-    _, err := db.Exec(query, con.fromDesc, con.toDesc, con.fromUrl, con.toUrl)
+    _, err := db.Exec(query, "friend", "friend", p1, p2)
 
     return err
 }

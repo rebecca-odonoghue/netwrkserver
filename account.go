@@ -2,20 +2,22 @@ package main
 
 import (
     "net/http"
+    "github.com/gorilla/mux"
     _ "github.com/lib/pq"
     "time"
     "golang.org/x/crypto/bcrypt"
     "encoding/json"
+    "log"
 )
 
 type Account struct {
-    email       string
-    dob         time.Time
+    Email       string      `json:"email"`
+    DOB         time.Time   `json:"dob"`
 }
 
 type Registration struct {
-    account     Account
-    password    string
+    Account     Account     `json:"account"`
+    Password    string      `json:"password"`
 }
 
 func authenticationHandler(w http.ResponseWriter, r *http.Request, url string) {
@@ -25,15 +27,45 @@ func authenticationHandler(w http.ResponseWriter, r *http.Request, url string) {
         return
     }
 
-    ok := checkAuthorisation(w,r)
+    email, ok := checkAuthorisation(w,r)
 
     if ok {
-        w.WriteHeader(200)
+
+        query := `SELECT firstname, lastname, url
+                FROM profile
+                WHERE email = $1;`
+
+        var firstname string
+        var lastname string
+        var path string
+        row := db.QueryRow(query, email)
+        err := row.Scan(&firstname, &lastname, &path)
+
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+        }
+
+        err = json.NewEncoder(w).Encode(struct {
+            FirstName string `json:"firstname"`
+            LastName string `json:"lastname"`
+            URL string `json:"url"`
+        }{
+            FirstName: firstname,
+            LastName: lastname,
+            URL: path,
+        })
+
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+        }
+
+        log.Println("Authentication successful")
     }
 
 }
 func registrationHandler(w http.ResponseWriter, r *http.Request, url string) {
 
+    log.Println("Registration requested");
     var reg Registration
 
     if r.Body == nil {
@@ -47,18 +79,24 @@ func registrationHandler(w http.ResponseWriter, r *http.Request, url string) {
         http.Error(w, err.Error(), http.StatusBadRequest)
         return
     }
-
-    err = createAccount(reg.account.email, reg.account.dob, reg.password)
+    log.Println("Request processed")
+    err = createAccount(reg.Account.Email, reg.Account.DOB, reg.Password)
 
     if err != nil {
         http.Error(w, err.Error(), http.StatusInternalServerError)
         return
     }
+
+    w.WriteHeader(http.StatusOK)
+    log.Println("Account created");
 }
 
-func accountHandler(w http.ResponseWriter, r *http.Request, url string) {
+func accountHandler(w http.ResponseWriter, r *http.Request) {
+    
+    vars := mux.Vars(r)
+    action := vars["action"]
 
-    switch url {
+    switch action {
     case "delete":
 
         var email string
@@ -83,21 +121,29 @@ func accountHandler(w http.ResponseWriter, r *http.Request, url string) {
         }
     case "modify":
 
-        var reg Registration
+        email, ok := checkAuthorisation(w,r)
+        
+        if !ok {
+            return
+        }
+
+        var acct struct { 
+            Pwd string `json:"password"`
+        }
 
         if r.Body == nil {
             http.Error(w, "Request body missing", http.StatusBadRequest)
             return
         }
 
-        err := json.NewDecoder(r.Body).Decode(&reg)
+        err := json.NewDecoder(r.Body).Decode(&acct)
 
         if err != nil {
             http.Error(w, err.Error(), http.StatusBadRequest)
             return
         }
 
-        err = changePassword(reg.account.email, reg.password)
+        err = changePassword(email, acct.Pwd)
 
         if err != nil {
             http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -132,7 +178,6 @@ func changePassword(email string, password string) error {
     if err == nil {
         _, err = db.Exec(query, hashedPwd, email)
     }
-
     return err
 }
 

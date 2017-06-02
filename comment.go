@@ -10,10 +10,10 @@ import(
 )
 
 type Comment struct {
-    postId      int
-    authorUrl   string
-    timestamp   time.Time
-    content     string
+    PostId      int         `json:"postId"`
+    AuthorUrl   string      `json:"authorUrl"`
+    Timestamp   time.Time   `json:"timestamp"`
+    Content     string      `json:"content"`
 }
 
 func commentHandler(w http.ResponseWriter, r *http.Request, url string) {
@@ -102,7 +102,7 @@ func commentHandler(w http.ResponseWriter, r *http.Request, url string) {
             return
         }
 
-        err = editComment(path[2], c.content)
+        err = editComment(path[2], c.Content)
 
         if err != nil {
             http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -124,8 +124,8 @@ func loadComment(id string) (*Comment, error) {
             WHERE id = $1;`
 
     var c Comment
-    err := db.QueryRow(query, id).Scan(&(c.postId), &(c.authorUrl), 
-            &(c.timestamp), &(c.content))
+    err := db.QueryRow(query, id).Scan(&(c.PostId), &(c.AuthorUrl), 
+            &(c.Timestamp), &(c.Content))
 
     if err != nil {
         return nil, err
@@ -138,8 +138,8 @@ func createComment(comment Comment) error {
     query := `INSERT INTO post (postid, authorurl, timestamp, content)
             VALUES ($1, $2, $3, $4);`
 
-    _, err := db.Exec(query, comment.postId, comment.authorUrl,
-            comment.timestamp, comment.content)
+    _, err := db.Exec(query, comment.PostId, comment.AuthorUrl,
+            comment.Timestamp, comment.Content)
 
     return err
 }

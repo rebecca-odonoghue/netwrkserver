@@ -12,17 +12,13 @@ import(
 const PostsPerRequest int = 20
 
 type FeedRequest struct {
-    identifier  string
-    mainFeed    bool
-    before      time.Time
+    Identifier  string      `json:"identifier"`
+    MainFeed    bool        `json:"mainFeed"`
+    Before      time.Time   `json:"before"`
 }
 
-func feedHandler(w http.ResponseWriter, r *http.Request, url string) {
-
-    if url != "" {
-        http.NotFound(w, r)
-        return
-    }
+func feedHandler(w http.ResponseWriter, r *http.Request) {
+    log.Println("feedHandler");
 
     var req FeedRequest
 
@@ -38,12 +34,12 @@ func feedHandler(w http.ResponseWriter, r *http.Request, url string) {
         return
     }
 
-    var results map[int]Post
+    var results []Post
 
-    if req.mainFeed {
-        results, err = getFriendPosts(req.identifier, req.before)
+    if req.MainFeed {
+        results, err = getFriendPosts(req.Identifier, req.Before)
     } else {
-        results, err = getProfilePosts(req.identifier, req.before)
+        results, err = getProfilePosts(req.Identifier, req.Before)
     }
 
 
@@ -52,18 +48,20 @@ func feedHandler(w http.ResponseWriter, r *http.Request, url string) {
         return
     }
 
-    addHeaders(w, r)
     err = json.NewEncoder(w).Encode(results)
+    log.Println(len(results))
 
     if err != nil {
         http.Error(w, err.Error(), http.StatusInternalServerError)
         log.Println(err)
     }
-
+    log.Println("Feed sent")
+    //log.Println(results));
 }
 
-func getFriendPosts(userEmail string, before time.Time) (map[int]Post, error) {
-
+func getFriendPosts(userEmail string, before time.Time) ([]Post, error) {
+    log.Println("getFriendPosts");
+    log.Println(before);
     var (
         query string
         rows *sql.Rows
@@ -71,27 +69,29 @@ func getFriendPosts(userEmail string, before time.Time) (map[int]Post, error) {
     )
 
     if before.IsZero() {
-        query = `SELECT post.*
-                FROM post, profile
-                WHERE profile.email = $1 
+        query = `SELECT p.id, p.profileurl, p.authorurl, p.timestamp, p.content
+                FROM post p, profile q
+                WHERE q.email = '$1' 
                 AND EXISTS (SELECT *
-                            FROM connection
-                            WHERE post.profileurl IN(connection.fromurl, connection.tourl)
-                            AND post.authorurl IN(connection.fromurl, connection.tourl))
-                ORDER BY post.timestamp DESC
-                FETCH FIRST $2 ROWS ONLY;`
+                            FROM connection c
+                            WHERE q.url IN(c.fromurl, c.tourl)
+                            AND (p.profileurl IN(c.fromurl, c.tourl)
+                                OR p.authorurl IN(c.fromurl, c.tourl)))
+                ORDER BY p.timestamp DESC
+                LIMIT $2;`
         rows, err = db.Query(query, userEmail, PostsPerRequest)
     } else {
-        query = `SELECT post.*
-                FROM post, profile
-                WHERE profile.email = $1 
-                AND post.timestamp < $2
+        query = `SELECT p.id, p.profileurl, p.authorurl, p.timestamp, p.content
+                FROM post p, profile q
+                WHERE q.email = $1 
+                AND p.timestamp < $2
                 AND EXISTS (SELECT *
-                            FROM connection
-                            WHERE post.profileurl IN(connection.fromurl, connection.tourl)
-                            AND post.authorurl IN(connection.fromurl, connection.tourl))
-                ORDER BY post.timestamp DESC
-                FETCH FIRST $3 ROWS ONLY;`
+                            FROM connection c
+                            WHERE q.url IN(c.fromurl, c.tourl)
+                            AND (p.profileurl IN(c.fromurl, c.tourl)
+                                OR p.authorurl IN(c.fromurl, c.tourl)))
+                ORDER BY p.timestamp DESC
+                LIMIT $3;`
         rows, err = db.Query(query, userEmail, before, PostsPerRequest)
     }
 
@@ -99,41 +99,46 @@ func getFriendPosts(userEmail string, before time.Time) (map[int]Post, error) {
         return nil, err
     }
 
-    var results map[int]Post = make(map[int]Post)
+    var results []Post
 
     for rows.Next() {
         var post Post
-        var id int
-        err = rows.Scan(&id, &(post.profileUrl), &(post.authorUrl), &(post.timestamp), &(post.content))
-        results[id] = post
+        err = rows.Scan(&post.ID, &post.ProfileUrl, &post.AuthorUrl, &post.Timestamp, &post.Content)
+        if err != nil {
+            return nil, err
+        }
+
+        if !containsPost(results, post) {
+            results = append(results, post)
+        }
     } 
 
     if err != nil {
         return nil, err
     }
-
+/*
     if len(results) < PostsPerRequest {
         if before.IsZero() {
-            query = `SELECT post.*
-                    FROM post, profile
-                    WHERE profile.email = $1
+            query = `SELECT p.id, p.profileurl, p.authorurl, p.timestamp, p.content
+                    FROM post p, profile q
+                    WHERE q.email = $1
                     AND EXISTS (SELECT * 
-                                FROM connection
-                                WHERE post.profileurl IN(connection.fromurl, connection.tourl))
-                    ORDER BY post.timestamp DESC
-                    FETCH FIRST $3 ROWS ONLY;`
+                                FROM connection c
+                                WHERE p.profileurl IN(c.fromurl, c.tourl))
+                    ORDER BY p.timestamp DESC
+                    LIMIT $2;`
             rows, err = db.Query(query, userEmail, PostsPerRequest - len(results))
         } else {
-            query = `SELECT post.*
-                    FROM post, profile
-                    WHERE profile.email = $1
-                    AND post.timestamp < $2
+            query = `SELECT p.id, p.profileurl, p.authorurl, p.timestamp, p.content
+                    FROM post p, profile q
+                    WHERE q.email = $1
+                    AND p.timestamp < $2
                     AND EXISTS (SELECT * 
-                                FROM connection
-                                WHERE post.profileurl IN(connection.fromurl, connection.tourl))
-                    ORDER BY post.timestamp DESC
-                    FETCH FIRST $2 ROWS ONLY;`
-            rows, err = db.Query(query, before, userEmail, PostsPerRequest - len(results))
+                                FROM connection c
+                                WHERE p.profileurl IN(c.fromurl, c.tourl))
+                    ORDER BY p.timestamp DESC
+                    LIMIT $3;`
+            rows, err = db.Query(query, userEmail, before, PostsPerRequest - len(results))
         }
 
         if err != nil {
@@ -142,21 +147,36 @@ func getFriendPosts(userEmail string, before time.Time) (map[int]Post, error) {
 
         for rows.Next() {
             var post Post
-            var id int
-            err = rows.Scan(&id, &(post.profileUrl), &(post.authorUrl), &(post.timestamp), &(post.content))
-            results[id] = post
+            err = rows.Scan(&post.ID, &post.ProfileUrl, &post.AuthorUrl, &post.Timestamp, &post.Content)
+            if err != nil {
+                return nil, err
+            }
+
+            if !containsPost(results, post) {
+                results = append(results, post)
+            }
         }
 
         if err != nil {
             return nil, err
         }
     }
-
+*/
     return results, nil
 }
 
-func getProfilePosts(profileUrl string, before time.Time) (map[int]Post, error) {
+func containsPost(list []Post, post Post) bool {
 
+    for _, item := range list {
+        if item.ID == post.ID {
+            return true
+        }
+    }
+
+    return false
+}
+
+func getProfilePosts(profileUrl string, before time.Time) ([]Post, error) {
     var (
         query string
         rows *sql.Rows
@@ -164,33 +184,32 @@ func getProfilePosts(profileUrl string, before time.Time) (map[int]Post, error) 
     )
 
     if before.IsZero() {
-        query = `SELECT *
+        query = `SELECT id, profileurl, authorurl, timestamp, content
                 FROM post
                 WHERE profileurl = $1 
                 ORDER BY timestamp DESC
-                FETCH FIRST $2 ROWS ONLY;`
-        rows, err = db.Query(query, profileUrl)
+                LIMIT $2;`
+        rows, err = db.Query(query, profileUrl, PostsPerRequest)
     } else {
-        query = `SELECT *
+        query = `SELECT id, profileurl, authorurl, timestamp, content
                 FROM post
                 WHERE profileurl = $1 
                 AND timestamp < $2
                 ORDER BY timestamp DESC
-                FETCH FIRST $3 ROWS ONLY;`
+                LIMIT $3;`
 
-        rows, err = db.Query(query, profileUrl, before)
+        rows, err = db.Query(query, profileUrl, before, PostsPerRequest)
     }
     if err != nil {
         return nil, err
     }
 
-    var results map[int]Post = make(map[int]Post)
+    var results []Post
 
     for rows.Next() {
         var post Post
-        var id int
-        err = rows.Scan(&id, &(post.profileUrl), &(post.authorUrl), &(post.timestamp), &(post.content))
-        results[id] = post
+        err = rows.Scan(&post.ID, &(post.ProfileUrl), &(post.AuthorUrl), &(post.Timestamp), &(post.Content))
+        results = append(results, post)
     }
 
     if err != nil {
